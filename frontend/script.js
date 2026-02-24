@@ -1,0 +1,250 @@
+// API base URL - use relative path to work from any host
+const API_URL = '/api';
+
+// Global state
+let currentSessionId = null;
+
+// DOM elements
+let chatMessages, chatInput, sendButton, totalCourses, courseTitles, newChatButton, themeToggle;
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    // Get DOM elements after page loads
+    chatMessages = document.getElementById('chatMessages');
+    chatInput = document.getElementById('chatInput');
+    sendButton = document.getElementById('sendButton');
+    totalCourses = document.getElementById('totalCourses');
+    courseTitles = document.getElementById('courseTitles');
+    newChatButton = document.getElementById('newChatButton');
+    themeToggle = document.getElementById('themeToggle');
+
+    setupEventListeners();
+    initTheme();
+    createNewSession();
+    loadCourseStats();
+});
+
+// Theme Functions
+const moonIconSVG = `<circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>`;
+const sunIconSVG = `<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>`;
+
+function initTheme() {
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    applyTheme(savedTheme);
+}
+
+function applyTheme(theme) {
+    const icon = document.getElementById('themeIcon');
+    const label = document.getElementById('themeLabel');
+    if (theme === 'light') {
+        document.body.classList.add('light-theme');
+        icon.innerHTML = sunIconSVG;
+        label.textContent = 'Dark';
+    } else {
+        document.body.classList.remove('light-theme');
+        icon.innerHTML = moonIconSVG;
+        label.textContent = 'Light';
+    }
+    localStorage.setItem('theme', theme);
+}
+
+function toggleTheme() {
+    const isLight = document.body.classList.contains('light-theme');
+    applyTheme(isLight ? 'dark' : 'light');
+}
+
+// Event Listeners
+function setupEventListeners() {
+    // Theme toggle
+    themeToggle.addEventListener('click', toggleTheme);
+
+    // New chat button
+    newChatButton.addEventListener('click', startNewChat);
+
+    // Chat functionality
+    sendButton.addEventListener('click', sendMessage);
+    chatInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') sendMessage();
+    });
+
+    // Suggested questions
+    document.querySelectorAll('.suggested-item').forEach(button => {
+        button.addEventListener('click', (e) => {
+            const question = e.target.getAttribute('data-question');
+            chatInput.value = question;
+            sendMessage();
+        });
+    });
+}
+
+
+// Chat Functions
+async function sendMessage() {
+    const query = chatInput.value.trim();
+    if (!query) return;
+
+    // Disable input
+    chatInput.value = '';
+    chatInput.disabled = true;
+    sendButton.disabled = true;
+
+    // Add user message
+    addMessage(query, 'user');
+
+    // Add loading message - create a unique container for it
+    const loadingMessage = createLoadingMessage();
+    chatMessages.appendChild(loadingMessage);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    try {
+        const response = await fetch(`${API_URL}/query`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                query: query,
+                session_id: currentSessionId
+            })
+        });
+
+        if (!response.ok) throw new Error('Query failed');
+
+        const data = await response.json();
+        
+        // Update session ID if new
+        if (!currentSessionId) {
+            currentSessionId = data.session_id;
+        }
+
+        // Replace loading message with response
+        loadingMessage.remove();
+        addMessage(data.answer, 'assistant', data.sources);
+
+    } catch (error) {
+        // Replace loading message with error
+        loadingMessage.remove();
+        addMessage(`Error: ${error.message}`, 'assistant');
+    } finally {
+        chatInput.disabled = false;
+        sendButton.disabled = false;
+        chatInput.focus();
+    }
+}
+
+function createLoadingMessage() {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message assistant';
+    messageDiv.innerHTML = `
+        <div class="message-content">
+            <div class="loading">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+        </div>
+    `;
+    return messageDiv;
+}
+
+function addMessage(content, type, sources = null, isWelcome = false) {
+    const messageId = Date.now();
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${type}${isWelcome ? ' welcome-message' : ''}`;
+    messageDiv.id = `message-${messageId}`;
+    
+    // Convert markdown to HTML for assistant messages
+    const displayContent = type === 'assistant' ? marked.parse(content) : escapeHtml(content);
+    
+    let html = `<div class="message-content">${displayContent}</div>`;
+    
+    if (sources && sources.length > 0) {
+        const renderedSources = sources.map(source => {
+            const match = source.trim().match(/^\[(.+?)\]\((.+?)\)$/);
+            if (match) {
+                const text = escapeHtml(match[1]);
+                const url = match[2];
+                return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="source-link"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 1.5H2.5a1 1 0 00-1 1v7a1 1 0 001 1h7a1 1 0 001-1V7.5"/><path d="M7 1.5h3.5V5"/><path d="M5 7L10.5 1.5"/></svg>${text}</a>`;
+            }
+            return `<span class="source-text">${escapeHtml(source)}</span>`;
+        }).join('');
+        html += `
+            <details class="sources-collapsible">
+                <summary class="sources-header">Sources (${sources.length})</summary>
+                <div class="sources-content">${renderedSources}</div>
+            </details>
+        `;
+    }
+    
+    messageDiv.innerHTML = html;
+    chatMessages.appendChild(messageDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    
+    return messageId;
+}
+
+// Helper function to escape HTML for user messages
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Removed removeMessage function - no longer needed since we handle loading differently
+
+async function startNewChat() {
+    // Clean up old session on the backend
+    if (currentSessionId) {
+        try {
+            await fetch(`${API_URL}/sessions/${currentSessionId}`, { method: 'DELETE' });
+        } catch (e) {
+            // Best-effort cleanup; proceed regardless
+        }
+    }
+    createNewSession();
+    chatInput.focus();
+}
+
+async function createNewSession() {
+    currentSessionId = null;
+    chatMessages.innerHTML = '';
+    addMessage('Welcome to the Course Materials Assistant! I can help you with questions about courses, lessons and specific content. What would you like to know?', 'assistant', null, true);
+}
+
+// Load course statistics
+async function loadCourseStats() {
+    try {
+        console.log('Loading course stats...');
+        const response = await fetch(`${API_URL}/courses`);
+        if (!response.ok) throw new Error('Failed to load course stats');
+        
+        const data = await response.json();
+        console.log('Course data received:', data);
+        
+        // Update stats in UI
+        if (totalCourses) {
+            totalCourses.textContent = data.total_courses;
+        }
+        
+        // Update course titles
+        if (courseTitles) {
+            if (data.course_titles && data.course_titles.length > 0) {
+                courseTitles.innerHTML = data.course_titles
+                    .map(title => `<div class="course-title-item">${title}</div>`)
+                    .join('');
+            } else {
+                courseTitles.innerHTML = '<span class="no-courses">No courses available</span>';
+            }
+        }
+        
+    } catch (error) {
+        console.error('Error loading course stats:', error);
+        // Set default values on error
+        if (totalCourses) {
+            totalCourses.textContent = '0';
+        }
+        if (courseTitles) {
+            courseTitles.innerHTML = '<span class="error">Failed to load courses</span>';
+        }
+    }
+}
